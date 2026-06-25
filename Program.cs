@@ -111,8 +111,16 @@ namespace LangSwitch
             }
         }
 
+        private System.Windows.Forms.Timer retryTimer;
+
         public void ApplyHotkey()
         {
+            if (retryTimer != null) {
+                retryTimer.Stop();
+                retryTimer.Dispose();
+                retryTimer = null;
+            }
+
             UnregisterHotKey(hkWindow.Handle, hotkeyId);
             int modifiers = 0;
             if (AppConfig.Alt) modifiers |= MOD_ALT;
@@ -121,13 +129,30 @@ namespace LangSwitch
             if (AppConfig.Win) modifiers |= MOD_WIN;
 
             Keys vk = Keys.F6;
-            Enum.TryParse(AppConfig.Key, out vk);
+            if (!Enum.TryParse(AppConfig.Key, true, out vk))
+            {
+                vk = Keys.F6;
+            }
             
-            bool success = RegisterHotKey(hkWindow.Handle, hotkeyId, modifiers, (int)vk);
-            if (!success) {
-                // Retry once
-                Thread.Sleep(200);
-                RegisterHotKey(hkWindow.Handle, hotkeyId, modifiers, (int)vk);
+            TryRegisterHotKey(modifiers, (int)vk, 15);
+        }
+
+        private void TryRegisterHotKey(int modifiers, int vk, int attemptsLeft)
+        {
+            bool success = RegisterHotKey(hkWindow.Handle, hotkeyId, modifiers, vk);
+            if (!success && attemptsLeft > 0)
+            {
+                retryTimer = new System.Windows.Forms.Timer();
+                retryTimer.Interval = 1000;
+                retryTimer.Tick += (s, e) => {
+                    if (retryTimer != null) {
+                        retryTimer.Stop();
+                        retryTimer.Dispose();
+                        retryTimer = null;
+                    }
+                    TryRegisterHotKey(modifiers, vk, attemptsLeft - 1);
+                };
+                retryTimer.Start();
             }
         }
 
@@ -145,6 +170,11 @@ namespace LangSwitch
 
         public void Exit(object sender, EventArgs e)
         {
+            if (retryTimer != null) {
+                retryTimer.Stop();
+                retryTimer.Dispose();
+                retryTimer = null;
+            }
             UnregisterHotKey(hkWindow.Handle, hotkeyId);
             trayIcon.Visible = false;
             Application.Exit();
@@ -305,11 +335,11 @@ namespace LangSwitch
                     string[] lines = File.ReadAllLines(ConfigPath);
                     if (lines.Length >= 5)
                     {
-                        Key = lines[0];
-                        bool.TryParse(lines[1], out Ctrl);
-                        bool.TryParse(lines[2], out Alt);
-                        bool.TryParse(lines[3], out Shift);
-                        bool.TryParse(lines[4], out Win);
+                        Key = lines[0].Trim();
+                        bool.TryParse(lines[1].Trim(), out Ctrl);
+                        bool.TryParse(lines[2].Trim(), out Alt);
+                        bool.TryParse(lines[3].Trim(), out Shift);
+                        bool.TryParse(lines[4].Trim(), out Win);
                     }
                 }
             }
