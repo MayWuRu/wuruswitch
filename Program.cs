@@ -6,6 +6,7 @@ using System.Threading;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
+using Microsoft.Win32;
 
 namespace LangSwitch
 {
@@ -100,7 +101,7 @@ namespace LangSwitch
             using (Graphics g = Graphics.FromImage(bmp))
             {
                 g.Clear(Color.FromArgb(41, 128, 185));
-                g.DrawString("LS", new Font("Arial", 12, FontStyle.Bold), Brushes.White, new PointF(2, 6));
+                g.DrawString("WS", new Font("Arial", 12, FontStyle.Bold), Brushes.White, new PointF(0, 6));
             }
             return Icon.FromHandle(bmp.GetHicon());
         }
@@ -233,11 +234,21 @@ namespace LangSwitch
         public static bool Alt = false;
         public static bool Shift = false;
         public static bool Win = false;
+        public static bool Startup = false;
 
         private static string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WuRuSwitch", "config.txt");
 
         public static void Load()
         {
+            try
+            {
+                using (RegistryKey rk = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false))
+                {
+                    Startup = (rk.GetValue("WuRuSwitch") != null);
+                }
+            }
+            catch { }
+
             try
             {
                 if (File.Exists(ConfigPath))
@@ -260,6 +271,18 @@ namespace LangSwitch
         {
             try
             {
+                using (RegistryKey rk = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true))
+                {
+                    if (Startup)
+                        rk.SetValue("WuRuSwitch", Application.ExecutablePath);
+                    else
+                        rk.DeleteValue("WuRuSwitch", false);
+                }
+            }
+            catch { }
+
+            try
+            {
                 Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath));
                 File.WriteAllLines(ConfigPath, new string[] { Key, Ctrl.ToString(), Alt.ToString(), Shift.ToString(), Win.ToString() });
             }
@@ -270,7 +293,7 @@ namespace LangSwitch
     public class SettingsForm : Form
     {
         private TrayContext context;
-        private CheckBox cbCtrl, cbAlt, cbShift, cbWin;
+        private CheckBox cbCtrl, cbAlt, cbShift, cbWin, cbStartup;
         private ComboBox comboKey;
         private Button btnSave;
 
@@ -278,7 +301,7 @@ namespace LangSwitch
         {
             context = ctx;
             this.Text = "WuRuSwitch Settings";
-            this.Size = new Size(350, 220);
+            this.Size = new Size(350, 250);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -310,7 +333,10 @@ namespace LangSwitch
 
             this.Controls.Add(comboKey);
 
-            btnSave = new Button() { Text = "Apply & Hide (บันทึกและซ่อน)", Location = new Point(20, 130), Width = 280, Height = 35, BackColor = Color.LightSkyBlue };
+            cbStartup = new CheckBox() { Text = "Run on Windows Startup (เปิดพร้อมคอม)", Location = new Point(20, 125), Width = 250 };
+            this.Controls.Add(cbStartup);
+
+            btnSave = new Button() { Text = "Apply & Hide (บันทึกและซ่อน)", Location = new Point(20, 160), Width = 280, Height = 35, BackColor = Color.LightSkyBlue };
             btnSave.Click += BtnSave_Click;
             this.Controls.Add(btnSave);
 
@@ -323,6 +349,7 @@ namespace LangSwitch
             cbAlt.Checked = AppConfig.Alt;
             cbShift.Checked = AppConfig.Shift;
             cbWin.Checked = AppConfig.Win;
+            cbStartup.Checked = AppConfig.Startup;
             
             if (comboKey.Items.Contains(AppConfig.Key))
                 comboKey.SelectedItem = AppConfig.Key;
@@ -336,6 +363,7 @@ namespace LangSwitch
             AppConfig.Alt = cbAlt.Checked;
             AppConfig.Shift = cbShift.Checked;
             AppConfig.Win = cbWin.Checked;
+            AppConfig.Startup = cbStartup.Checked;
             AppConfig.Key = comboKey.SelectedItem.ToString();
             AppConfig.Save();
             
