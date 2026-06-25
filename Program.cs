@@ -180,78 +180,143 @@ namespace LangSwitch
             Application.Exit();
         }
 
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int vKey);
+
+        private void SendKeyWithModifier(byte modifier, byte key, bool isExtendedKey = false)
+        {
+            uint ext = isExtendedKey ? 0x0001u : 0u;
+            keybd_event(modifier, 0, 0, UIntPtr.Zero);
+            keybd_event(key, 0, ext, UIntPtr.Zero);
+            Thread.Sleep(10);
+            keybd_event(key, 0, ext | 0x0002u, UIntPtr.Zero);
+            keybd_event(modifier, 0, 0x0002, UIntPtr.Zero);
+        }
+
+        private void SendExtendedKey(byte key)
+        {
+            keybd_event(key, 0, 0x0001, UIntPtr.Zero);
+            Thread.Sleep(10);
+            keybd_event(key, 0, 0x0001 | 0x0002, UIntPtr.Zero);
+        }
+
         public void OnHotkeyPressed()
         {
-            // Release modifiers
+            // Release modifiers if they are held down
             const uint KEYEVENTF_KEYUP = 0x0002;
-            keybd_event(0x11, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // ctrl
-            keybd_event(0x12, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // alt
-            keybd_event(0x10, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // shift
-            keybd_event(0x5B, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // lwin
-            keybd_event(0x5C, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // rwin
+            if ((GetAsyncKeyState(0x11) & 0x8000) != 0) keybd_event(0x11, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // ctrl
+            if ((GetAsyncKeyState(0x12) & 0x8000) != 0) keybd_event(0x12, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // alt
+            if ((GetAsyncKeyState(0x10) & 0x8000) != 0) keybd_event(0x10, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // shift
+            if ((GetAsyncKeyState(0x5B) & 0x8000) != 0) keybd_event(0x5B, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // lwin
+            if ((GetAsyncKeyState(0x5C) & 0x8000) != 0) keybd_event(0x5C, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // rwin
             
-            Thread.Sleep(100);
+            // Release the hotkey itself
+            Keys vk = Keys.F6;
+            Enum.TryParse(AppConfig.Key, true, out vk);
+            keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+            Thread.Sleep(50);
             
-            string oldClipboard = "";
-            try { oldClipboard = Clipboard.GetText(); } catch { }
+            string oldClipboard = GetClipboardText(100);
             
-            Clipboard.Clear();
-            SendKeys.SendWait("^c");
+            for (int i = 0; i < 3; i++) { try { Clipboard.Clear(); break; } catch { Thread.Sleep(50); } }
             
-            // Wait for clipboard to populate
-            Thread.Sleep(150);
-            string text = "";
-            try { text = Clipboard.GetText(); } catch { }
+            SendKeyWithModifier(0x11, 0x43); // Ctrl+C
+            
+            string text = GetClipboardText(300);
             
             if (string.IsNullOrEmpty(text))
             {
                 // No text selected, try to select the current line to find the last word
-                SendKeys.SendWait("+{HOME}");
+                SendKeyWithModifier(0x10, 0x24, true); // Shift+Home
                 Thread.Sleep(50);
                 
-                Clipboard.Clear();
-                SendKeys.SendWait("^c");
-                Thread.Sleep(150);
+                for (int i = 0; i < 3; i++) { try { Clipboard.Clear(); break; } catch { Thread.Sleep(50); } }
                 
-                // Deselect and restore cursor to its original position
-                SendKeys.SendWait("{RIGHT}");
-                Thread.Sleep(50);
-
-                string lineText = "";
-                try { lineText = Clipboard.GetText(); } catch { }
+                SendKeyWithModifier(0x11, 0x43); // Ctrl+C
+                
+                string lineText = GetClipboardText(300);
                 
                 if (string.IsNullOrEmpty(lineText))
                 {
-                    try { if (!string.IsNullOrEmpty(oldClipboard)) Clipboard.SetText(oldClipboard); } catch { }
+                    SendExtendedKey(0x27); // Right
+                    RestoreClipboard(oldClipboard);
                     return;
                 }
 
                 string trimmed = lineText.TrimEnd();
                 if (trimmed.Length == 0)
                 {
-                    try { if (!string.IsNullOrEmpty(oldClipboard)) Clipboard.SetText(oldClipboard); } catch { }
+                    SendExtendedKey(0x27); // Right
+                    RestoreClipboard(oldClipboard);
                     return;
                 }
 
                 int lastSpace = trimmed.LastIndexOfAny(new char[] { ' ', '\t', '\n', '\r' });
                 int charsToSelect = lineText.Length - (lastSpace + 1);
                 
-                // The text we want to convert
                 text = lineText.Substring(lineText.Length - charsToSelect);
-
-                // Select the exact text to be replaced
-                SendKeys.SendWait("+{LEFT " + charsToSelect + "}");
-                Thread.Sleep(50);
+                string prefix = lineText.Substring(0, lineText.Length - charsToSelect);
+                
+                string convertedLine = prefix + ConvertText(text);
+                SetClipboardText(convertedLine);
+                
+                SendKeyWithModifier(0x11, 0x56); // Ctrl+V
+                Thread.Sleep(100);
+                
+                RestoreClipboard(oldClipboard);
+                return;
             }
 
             string converted = ConvertText(text);
-            try { Clipboard.SetText(converted); } catch { }
+            SetClipboardText(converted);
             
-            SendKeys.SendWait("^v");
+            SendKeyWithModifier(0x11, 0x56); // Ctrl+V
             Thread.Sleep(100);
             
-            // Restore original clipboard text
-            try { if (!string.IsNullOrEmpty(oldClipboard)) Clipboard.SetText(oldClipboard); else Clipboard.Clear(); } catch { }
+            RestoreClipboard(oldClipboard);
+        }
+
+        private string GetClipboardText(int maxWaitMs)
+        {
+            int waited = 0;
+            while (waited < maxWaitMs)
+            {
+                try 
+                { 
+                    if (Clipboard.ContainsText()) 
+                    {
+                        string txt = Clipboard.GetText();
+                        if (!string.IsNullOrEmpty(txt)) return txt;
+                    }
+                }
+                catch { }
+                Thread.Sleep(20);
+                waited += 20;
+            }
+            return "";
+        }
+
+        private void SetClipboardText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            for (int i = 0; i < 5; i++)
+            {
+                try { Clipboard.SetText(text); return; }
+                catch { Thread.Sleep(50); }
+            }
+        }
+
+        private void RestoreClipboard(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                for (int i = 0; i < 5; i++) { try { Clipboard.Clear(); return; } catch { Thread.Sleep(50); } }
+            }
+            else
+            {
+                SetClipboardText(text);
+            }
         }
 
         private string eng_layout = "`1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?";
