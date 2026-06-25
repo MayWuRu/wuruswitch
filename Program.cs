@@ -88,9 +88,17 @@ namespace LangSwitch
             trayIcon.DoubleClick += ShowSettings;
 
             hkWindow = new HotkeyWindow(this);
-            ApplyHotkey();
             
             settingsForm = new SettingsForm(this);
+            
+            // Register hotkey after application starts pumping messages
+            System.Windows.Forms.Timer startupTimer = new System.Windows.Forms.Timer();
+            startupTimer.Interval = 500;
+            startupTimer.Tick += (s, e) => {
+                startupTimer.Stop();
+                ApplyHotkey();
+            };
+            startupTimer.Start();
             
             trayIcon.ShowBalloonTip(3000, "WuRuSwitch", "Program is running. Right click for settings.", ToolTipIcon.Info);
         }
@@ -101,7 +109,7 @@ namespace LangSwitch
             using (Graphics g = Graphics.FromImage(bmp))
             {
                 g.Clear(Color.FromArgb(41, 128, 185));
-                g.DrawString("WS", new Font("Arial", 12, FontStyle.Bold), Brushes.White, new PointF(0, 6));
+                g.DrawString("WS", new Font("Arial", 11, FontStyle.Bold), Brushes.White, new PointF(1, 6));
             }
             return Icon.FromHandle(bmp.GetHicon());
         }
@@ -118,7 +126,12 @@ namespace LangSwitch
             Keys vk = Keys.F6;
             Enum.TryParse(AppConfig.Key, out vk);
             
-            RegisterHotKey(hkWindow.Handle, hotkeyId, modifiers, (int)vk);
+            bool success = RegisterHotKey(hkWindow.Handle, hotkeyId, modifiers, (int)vk);
+            if (!success) {
+                // Retry once
+                Thread.Sleep(200);
+                RegisterHotKey(hkWindow.Handle, hotkeyId, modifiers, (int)vk);
+            }
         }
 
         public void ShowSettings(object sender, EventArgs e)
