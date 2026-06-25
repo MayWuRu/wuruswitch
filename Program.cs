@@ -90,20 +90,15 @@ namespace LangSwitch
             hkWindow = new HotkeyWindow(this);
             settingsForm = new SettingsForm(this);
             
-            Application.Idle += Application_Idle;
+            ApplyHotkey();
             
             trayIcon.ShowBalloonTip(3000, "WuRuSwitch", "Program is running. Right click for settings.", ToolTipIcon.Info);
-        }
-
-        private void Application_Idle(object sender, EventArgs e)
-        {
-            Application.Idle -= Application_Idle;
-            ApplyHotkey();
         }
 
         private Icon CreateIcon()
         {
             try {
+                if (File.Exists("logo.ico")) return new Icon("logo.ico");
                 return Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             } catch {
                 Bitmap bmp = new Bitmap(32, 32);
@@ -180,14 +175,31 @@ namespace LangSwitch
             
             if (string.IsNullOrEmpty(text))
             {
-                try { if (!string.IsNullOrEmpty(oldClipboard)) Clipboard.SetText(oldClipboard); } catch { }
-                return;
+                // No text selected, attempt to select previous word
+                SendKeys.SendWait("^+{LEFT}");
+                Thread.Sleep(50);
+                
+                Clipboard.Clear();
+                SendKeys.SendWait("^c");
+                Thread.Sleep(150);
+                
+                try { text = Clipboard.GetText(); } catch { }
+                
+                if (string.IsNullOrEmpty(text))
+                {
+                    try { if (!string.IsNullOrEmpty(oldClipboard)) Clipboard.SetText(oldClipboard); } catch { }
+                    return;
+                }
             }
 
             string converted = ConvertText(text);
             try { Clipboard.SetText(converted); } catch { }
             
             SendKeys.SendWait("^v");
+            Thread.Sleep(100);
+            
+            // Restore original clipboard text
+            try { if (!string.IsNullOrEmpty(oldClipboard)) Clipboard.SetText(oldClipboard); else Clipboard.Clear(); } catch { }
         }
 
         private string eng_layout = "`1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?";
