@@ -88,19 +88,17 @@ namespace LangSwitch
             trayIcon.DoubleClick += ShowSettings;
 
             hkWindow = new HotkeyWindow(this);
-            
             settingsForm = new SettingsForm(this);
             
-            // Register hotkey after application starts pumping messages
-            System.Windows.Forms.Timer startupTimer = new System.Windows.Forms.Timer();
-            startupTimer.Interval = 500;
-            startupTimer.Tick += (s, e) => {
-                startupTimer.Stop();
-                ApplyHotkey();
-            };
-            startupTimer.Start();
+            Application.Idle += Application_Idle;
             
             trayIcon.ShowBalloonTip(3000, "WuRuSwitch", "Program is running. Right click for settings.", ToolTipIcon.Info);
+        }
+
+        private void Application_Idle(object sender, EventArgs e)
+        {
+            Application.Idle -= Application_Idle;
+            ApplyHotkey();
         }
 
         private Icon CreateIcon()
