@@ -103,13 +103,17 @@ namespace LangSwitch
 
         private Icon CreateIcon()
         {
-            Bitmap bmp = new Bitmap(32, 32);
-            using (Graphics g = Graphics.FromImage(bmp))
-            {
-                g.Clear(Color.FromArgb(41, 128, 185));
-                g.DrawString("WS", new Font("Arial", 11, FontStyle.Bold), Brushes.White, new PointF(1, 6));
+            try {
+                return Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            } catch {
+                Bitmap bmp = new Bitmap(32, 32);
+                using (Graphics g = Graphics.FromImage(bmp))
+                {
+                    g.Clear(Color.FromArgb(41, 128, 185));
+                    g.DrawString("WS", new Font("Arial", 11, FontStyle.Bold), Brushes.White, new PointF(1, 6));
+                }
+                return Icon.FromHandle(bmp.GetHicon());
             }
-            return Icon.FromHandle(bmp.GetHicon());
         }
 
         public void ApplyHotkey()
