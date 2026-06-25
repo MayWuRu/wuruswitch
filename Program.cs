@@ -175,21 +175,43 @@ namespace LangSwitch
             
             if (string.IsNullOrEmpty(text))
             {
-                // No text selected, attempt to select previous word
-                SendKeys.SendWait("^+{LEFT}");
+                // No text selected, try to select the current line to find the last word
+                SendKeys.SendWait("+{HOME}");
                 Thread.Sleep(50);
                 
                 Clipboard.Clear();
                 SendKeys.SendWait("^c");
                 Thread.Sleep(150);
                 
-                try { text = Clipboard.GetText(); } catch { }
+                // Deselect and restore cursor to its original position
+                SendKeys.SendWait("{RIGHT}");
+                Thread.Sleep(50);
+
+                string lineText = "";
+                try { lineText = Clipboard.GetText(); } catch { }
                 
-                if (string.IsNullOrEmpty(text))
+                if (string.IsNullOrEmpty(lineText))
                 {
                     try { if (!string.IsNullOrEmpty(oldClipboard)) Clipboard.SetText(oldClipboard); } catch { }
                     return;
                 }
+
+                string trimmed = lineText.TrimEnd();
+                if (trimmed.Length == 0)
+                {
+                    try { if (!string.IsNullOrEmpty(oldClipboard)) Clipboard.SetText(oldClipboard); } catch { }
+                    return;
+                }
+
+                int lastSpace = trimmed.LastIndexOfAny(new char[] { ' ', '\t', '\n', '\r' });
+                int charsToSelect = lineText.Length - (lastSpace + 1);
+                
+                // The text we want to convert
+                text = lineText.Substring(lineText.Length - charsToSelect);
+
+                // Select the exact text to be replaced
+                SendKeys.SendWait("+{LEFT " + charsToSelect + "}");
+                Thread.Sleep(50);
             }
 
             string converted = ConvertText(text);
