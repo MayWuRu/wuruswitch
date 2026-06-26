@@ -44,6 +44,46 @@ namespace LangSwitch
         [DllImport("user32.dll")]
         public static extern IntPtr LoadKeyboardLayout(string pwszKLID, uint Flags);
 
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetKeyboardLayout(uint idThread);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct GUITHREADINFO
+        {
+            public int cbSize;
+            public int flags;
+            public IntPtr hwndActive;
+            public IntPtr hwndFocus;
+            public IntPtr hwndCapture;
+            public IntPtr hwndMenuOwner;
+            public IntPtr hwndMoveSize;
+            public IntPtr hwndCaret;
+            public RECT rcCaret;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ClientToScreen(IntPtr hWnd, ref Point lpPoint);
+
+        [DllImport("user32.dll")]
+        public static extern short GetKeyState(int nVirtKey);
+
+        private const int VK_CAPITAL = 0x14;
         private const uint WM_INPUTLANGCHANGEREQUEST = 0x0050;
 
         private const int MOD_ALT = 0x0001;
@@ -81,6 +121,9 @@ namespace LangSwitch
             }
         }
 
+        private IndicatorForm indicatorForm;
+        private System.Windows.Forms.Timer indicatorTimer;
+
         public TrayContext()
         {
             AppConfig.Load();
@@ -100,11 +143,76 @@ namespace LangSwitch
 
             hkWindow = new HotkeyWindow(this);
             settingsForm = new SettingsForm(this);
+            indicatorForm = new IndicatorForm();
+            
+            indicatorTimer = new System.Windows.Forms.Timer();
+            indicatorTimer.Interval = 100;
+            indicatorTimer.Tick += IndicatorTimer_Tick;
+            indicatorTimer.Start();
             
             ApplyHotkey();
             
             trayIcon.ShowBalloonTip(3000, "WuRuSwitch", "Program is running. Right click for settings.", ToolTipIcon.Info);
         }
+
+        private void IndicatorTimer_Tick(object sender, EventArgs e)
+        {
+            if (!AppConfig.ShowLangIndicator)
+            {
+                if (indicatorForm.Visible) indicatorForm.Hide();
+                return;
+            }
+
+            IntPtr hwnd = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero)
+            {
+                if (indicatorForm.Visible) indicatorForm.Hide();
+                return;
+            }
+
+            uint pid;
+            uint threadId = GetWindowThreadProcessId(hwnd, out pid);
+            
+            GUITHREADINFO gti = new GUITHREADINFO();
+            gti.cbSize = Marshal.SizeOf(gti);
+            
+            if (GetGUIThreadInfo(threadId, ref gti) && gti.hwndCaret != IntPtr.Zero)
+            {
+                Point pt = new Point(gti.rcCaret.Left, gti.rcCaret.Bottom);
+                ClientToScreen(gti.hwndCaret, ref pt);
+                
+                IntPtr hkl = GetKeyboardLayout(threadId);
+                long langId = hkl.ToInt64() & 0xFFFF;
+                bool isThai = (langId == 0x041E);
+                
+                bool capsLock = (GetKeyState(VK_CAPITAL) & 0x0001) != 0;
+                
+                if (indicatorForm.IsThai != isThai || indicatorForm.IsCapsLock != capsLock)
+                {
+                    indicatorForm.IsThai = isThai;
+                    indicatorForm.IsCapsLock = capsLock;
+                    indicatorForm.Invalidate();
+                }
+                
+                pt.X += 5;
+                pt.Y += 5;
+                
+                if (indicatorForm.Location != pt)
+                {
+                    indicatorForm.Location = pt;
+                }
+                
+                if (!indicatorForm.Visible)
+                {
+                    indicatorForm.Show();
+                }
+            }
+            else
+            {
+                if (indicatorForm.Visible) indicatorForm.Hide();
+            }
+        }
+
 
         private Icon CreateIcon()
         {
@@ -397,6 +505,88 @@ namespace LangSwitch
         }
     }
 
+    public class IndicatorForm : Form
+    {
+        private Bitmap thFlag;
+        private Bitmap usFlag;
+        
+        public bool IsThai { get; set; }
+        public bool IsCapsLock { get; set; }
+        
+        public IndicatorForm()
+        {
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.ShowInTaskbar = false;
+            this.TopMost = true;
+            this.BackColor = Color.Magenta;
+            this.TransparencyKey = Color.Magenta;
+            this.Size = new Size(50, 20);
+            
+            this.DoubleBuffered = true;
+            CreateFlags();
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE
+                cp.ExStyle |= 0x80000;    // WS_EX_LAYERED
+                cp.ExStyle |= 0x20;       // WS_EX_TRANSPARENT
+                cp.ExStyle |= 0x80;       // WS_EX_TOOLWINDOW
+                return cp;
+            }
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        private void CreateFlags()
+        {
+            thFlag = new Bitmap(16, 11);
+            using (Graphics g = Graphics.FromImage(thFlag))
+            {
+                g.FillRectangle(Brushes.Red, 0, 0, 16, 2);
+                g.FillRectangle(Brushes.White, 0, 2, 16, 2);
+                g.FillRectangle(Brushes.Blue, 0, 4, 16, 3);
+                g.FillRectangle(Brushes.White, 0, 7, 16, 2);
+                g.FillRectangle(Brushes.Red, 0, 9, 16, 2);
+            }
+            
+            usFlag = new Bitmap(16, 11);
+            using (Graphics g = Graphics.FromImage(usFlag))
+            {
+                for (int i = 0; i < 11; i++)
+                    g.FillRectangle(i % 2 == 0 ? Brushes.Red : Brushes.White, 0, i, 16, 1);
+                g.FillRectangle(Brushes.DarkBlue, 0, 0, 7, 6);
+            }
+        }
+        
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Color.Magenta);
+            
+            int x = 0;
+            if (IsThai) e.Graphics.DrawImageUnscaled(thFlag, x, 4);
+            else e.Graphics.DrawImageUnscaled(usFlag, x, 4);
+            
+            x += 18;
+            
+            if (IsCapsLock)
+            {
+                using (Font f = new Font("Arial", 7, FontStyle.Bold))
+                {
+                    e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
+                    e.Graphics.DrawString("[A]", f, Brushes.Black, x-1, 3);
+                    e.Graphics.DrawString("[A]", f, Brushes.Black, x+1, 3);
+                    e.Graphics.DrawString("[A]", f, Brushes.Black, x, 2);
+                    e.Graphics.DrawString("[A]", f, Brushes.Black, x, 4);
+                    e.Graphics.DrawString("[A]", f, Brushes.White, x, 3);
+                }
+            }
+        }
+    }
+
     public static class AppConfig
     {
         public static string Key = "F6";
@@ -406,6 +596,7 @@ namespace LangSwitch
         public static bool Win = false;
         public static bool Startup = false;
         public static bool AutoSwitchKeyboard = false;
+        public static bool ShowLangIndicator = false;
 
         private static string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WuRuSwitch", "config.txt");
 
@@ -433,6 +624,7 @@ namespace LangSwitch
                         bool.TryParse(lines[3].Trim(), out Shift);
                         bool.TryParse(lines[4].Trim(), out Win);
                         if (lines.Length >= 6) bool.TryParse(lines[5].Trim(), out AutoSwitchKeyboard);
+                        if (lines.Length >= 7) bool.TryParse(lines[6].Trim(), out ShowLangIndicator);
                     }
                 }
             }
@@ -456,7 +648,7 @@ namespace LangSwitch
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath));
-                File.WriteAllLines(ConfigPath, new string[] { Key, Ctrl.ToString(), Alt.ToString(), Shift.ToString(), Win.ToString(), AutoSwitchKeyboard.ToString() });
+                File.WriteAllLines(ConfigPath, new string[] { Key, Ctrl.ToString(), Alt.ToString(), Shift.ToString(), Win.ToString(), AutoSwitchKeyboard.ToString(), ShowLangIndicator.ToString() });
             }
             catch { }
         }
@@ -465,7 +657,7 @@ namespace LangSwitch
     public class SettingsForm : Form
     {
         private TrayContext context;
-        private CheckBox cbCtrl, cbAlt, cbShift, cbWin, cbStartup, cbAutoSwitch;
+        private CheckBox cbCtrl, cbAlt, cbShift, cbWin, cbStartup, cbAutoSwitch, cbShowLangIndicator;
         private ComboBox comboKey;
         private Button btnSave;
 
@@ -473,7 +665,7 @@ namespace LangSwitch
         {
             context = ctx;
             this.Text = "WuRuSwitch Settings";
-            this.Size = new Size(350, 275);
+            this.Size = new Size(350, 300);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -511,7 +703,10 @@ namespace LangSwitch
             cbAutoSwitch = new CheckBox() { Text = "Auto Switch Keyboard (สลับภาษาแป้นพิมพ์อัตโนมัติ)", Location = new Point(20, 145), Width = 300 };
             this.Controls.Add(cbAutoSwitch);
 
-            btnSave = new Button() { Text = "Apply & Hide (บันทึกและซ่อน)", Location = new Point(20, 180), Width = 280, Height = 35, BackColor = Color.LightSkyBlue };
+            cbShowLangIndicator = new CheckBox() { Text = "Show Lang Indicator at Cursor (แสดงธงที่เคอร์เซอร์)", Location = new Point(20, 170), Width = 300 };
+            this.Controls.Add(cbShowLangIndicator);
+
+            btnSave = new Button() { Text = "Apply & Hide (บันทึกและซ่อน)", Location = new Point(20, 205), Width = 280, Height = 35, BackColor = Color.LightSkyBlue };
             btnSave.Click += BtnSave_Click;
             this.Controls.Add(btnSave);
 
@@ -526,6 +721,7 @@ namespace LangSwitch
             cbWin.Checked = AppConfig.Win;
             cbStartup.Checked = AppConfig.Startup;
             cbAutoSwitch.Checked = AppConfig.AutoSwitchKeyboard;
+            cbShowLangIndicator.Checked = AppConfig.ShowLangIndicator;
             
             if (comboKey.Items.Contains(AppConfig.Key))
                 comboKey.SelectedItem = AppConfig.Key;
@@ -541,6 +737,7 @@ namespace LangSwitch
             AppConfig.Win = cbWin.Checked;
             AppConfig.Startup = cbStartup.Checked;
             AppConfig.AutoSwitchKeyboard = cbAutoSwitch.Checked;
+            AppConfig.ShowLangIndicator = cbShowLangIndicator.Checked;
             AppConfig.Key = comboKey.SelectedItem.ToString();
             AppConfig.Save();
             
