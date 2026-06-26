@@ -35,6 +35,17 @@ namespace LangSwitch
         [DllImport("user32.dll")]
         public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr LoadKeyboardLayout(string pwszKLID, uint Flags);
+
+        private const uint WM_INPUTLANGCHANGEREQUEST = 0x0050;
+
         private const int MOD_ALT = 0x0001;
         private const int MOD_CONTROL = 0x0002;
         private const int MOD_SHIFT = 0x0004;
@@ -341,6 +352,21 @@ namespace LangSwitch
 
             bool primaryIsEng = engCount >= thaCount;
 
+            if (AppConfig.AutoSwitchKeyboard)
+            {
+                IntPtr hwnd = GetForegroundWindow();
+                if (primaryIsEng)
+                {
+                    IntPtr hklThai = LoadKeyboardLayout("0000041E", 1);
+                    PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, IntPtr.Zero, hklThai);
+                }
+                else
+                {
+                    IntPtr hklEng = LoadKeyboardLayout("00000409", 1);
+                    PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, IntPtr.Zero, hklEng);
+                }
+            }
+
             StringBuilder sb = new StringBuilder();
             foreach (char c in text)
             {
@@ -379,6 +405,7 @@ namespace LangSwitch
         public static bool Shift = false;
         public static bool Win = false;
         public static bool Startup = false;
+        public static bool AutoSwitchKeyboard = false;
 
         private static string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WuRuSwitch", "config.txt");
 
@@ -405,6 +432,7 @@ namespace LangSwitch
                         bool.TryParse(lines[2].Trim(), out Alt);
                         bool.TryParse(lines[3].Trim(), out Shift);
                         bool.TryParse(lines[4].Trim(), out Win);
+                        if (lines.Length >= 6) bool.TryParse(lines[5].Trim(), out AutoSwitchKeyboard);
                     }
                 }
             }
@@ -428,7 +456,7 @@ namespace LangSwitch
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath));
-                File.WriteAllLines(ConfigPath, new string[] { Key, Ctrl.ToString(), Alt.ToString(), Shift.ToString(), Win.ToString() });
+                File.WriteAllLines(ConfigPath, new string[] { Key, Ctrl.ToString(), Alt.ToString(), Shift.ToString(), Win.ToString(), AutoSwitchKeyboard.ToString() });
             }
             catch { }
         }
@@ -437,7 +465,7 @@ namespace LangSwitch
     public class SettingsForm : Form
     {
         private TrayContext context;
-        private CheckBox cbCtrl, cbAlt, cbShift, cbWin, cbStartup;
+        private CheckBox cbCtrl, cbAlt, cbShift, cbWin, cbStartup, cbAutoSwitch;
         private ComboBox comboKey;
         private Button btnSave;
 
@@ -445,7 +473,7 @@ namespace LangSwitch
         {
             context = ctx;
             this.Text = "WuRuSwitch Settings";
-            this.Size = new Size(350, 250);
+            this.Size = new Size(350, 275);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -477,10 +505,13 @@ namespace LangSwitch
 
             this.Controls.Add(comboKey);
 
-            cbStartup = new CheckBox() { Text = "Run on Windows Startup (เปิดพร้อมคอม)", Location = new Point(20, 125), Width = 250 };
+            cbStartup = new CheckBox() { Text = "Run on Windows Startup (เปิดพร้อมคอม)", Location = new Point(20, 120), Width = 250 };
             this.Controls.Add(cbStartup);
 
-            btnSave = new Button() { Text = "Apply & Hide (บันทึกและซ่อน)", Location = new Point(20, 160), Width = 280, Height = 35, BackColor = Color.LightSkyBlue };
+            cbAutoSwitch = new CheckBox() { Text = "Auto Switch Keyboard (สลับภาษาแป้นพิมพ์อัตโนมัติ)", Location = new Point(20, 145), Width = 300 };
+            this.Controls.Add(cbAutoSwitch);
+
+            btnSave = new Button() { Text = "Apply & Hide (บันทึกและซ่อน)", Location = new Point(20, 180), Width = 280, Height = 35, BackColor = Color.LightSkyBlue };
             btnSave.Click += BtnSave_Click;
             this.Controls.Add(btnSave);
 
@@ -494,6 +525,7 @@ namespace LangSwitch
             cbShift.Checked = AppConfig.Shift;
             cbWin.Checked = AppConfig.Win;
             cbStartup.Checked = AppConfig.Startup;
+            cbAutoSwitch.Checked = AppConfig.AutoSwitchKeyboard;
             
             if (comboKey.Items.Contains(AppConfig.Key))
                 comboKey.SelectedItem = AppConfig.Key;
@@ -508,6 +540,7 @@ namespace LangSwitch
             AppConfig.Shift = cbShift.Checked;
             AppConfig.Win = cbWin.Checked;
             AppConfig.Startup = cbStartup.Checked;
+            AppConfig.AutoSwitchKeyboard = cbAutoSwitch.Checked;
             AppConfig.Key = comboKey.SelectedItem.ToString();
             AppConfig.Save();
             
