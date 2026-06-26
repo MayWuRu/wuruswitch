@@ -209,15 +209,9 @@ namespace LangSwitch
         private IndicatorForm indicatorForm;
         private System.Windows.Forms.Timer indicatorTimer;
 
-        private LowLevelKeyboardProc _proc;
-        private IntPtr _hookID = IntPtr.Zero;
-
         public TrayContext()
         {
             AppConfig.Load();
-
-            _proc = HookCallback;
-            _hookID = SetHook(_proc);
             
             trayIcon = new NotifyIcon()
             {
@@ -247,50 +241,8 @@ namespace LangSwitch
             IndicatorTimer_Tick(null, null);
         }
 
-        private IntPtr SetHook(LowLevelKeyboardProc proc)
-        {
-            using (var curProcess = System.Diagnostics.Process.GetCurrentProcess())
-            using (var curModule = curProcess.MainModule)
-            {
-                return SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
-            }
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct KBDLLHOOKSTRUCT
-        {
-            public int vkCode;
-            public int scanCode;
-            public int flags;
-            public int time;
-            public IntPtr dwExtraInfo;
-        }
-
-        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
-        {
-            if (nCode >= 0)
-            {
-                KBDLLHOOKSTRUCT kbdStruct = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
-                bool isInjected = (kbdStruct.flags & 0x10) != 0;
-                
-                if (!isInjected)
-                {
-                    if (kbdStruct.vkCode == VK_CAPITAL && AppConfig.AlwaysDisableCapsLock)
-                    {
-                        return (IntPtr)1; // Block CapsLock
-                    }
-                    if (kbdStruct.vkCode == VK_NUMLOCK && AppConfig.AlwaysEnableNumLock)
-                    {
-                        return (IntPtr)1; // Block NumLock
-                    }
-                }
-            }
-            return CallNextHookEx(_hookID, nCode, wParam, lParam);
-        }
-
         private void IndicatorTimer_Tick(object sender, EventArgs e)
         {
-            // Enforce Lock Keys
             if (AppConfig.AlwaysDisableCapsLock)
             {
                 if ((GetKeyState(VK_CAPITAL) & 0x0001) != 0)
@@ -304,8 +256,8 @@ namespace LangSwitch
             {
                 if ((GetKeyState(VK_NUMLOCK) & 0x0001) == 0)
                 {
-                    keybd_event((byte)VK_NUMLOCK, 0x45, KEYEVENTF_EXTENDEDKEY, UIntPtr.Zero);
-                    keybd_event((byte)VK_NUMLOCK, 0x45, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, UIntPtr.Zero);
+                    keybd_event((byte)VK_NUMLOCK, 0x45, 0, UIntPtr.Zero);
+                    keybd_event((byte)VK_NUMLOCK, 0x45, KEYEVENTF_KEYUP, UIntPtr.Zero);
                 }
             }
 
@@ -364,7 +316,6 @@ namespace LangSwitch
                 if (indicatorForm.Visible) indicatorForm.Hide();
             }
         }
-
 
         private Icon CreateIcon()
         {
@@ -441,16 +392,6 @@ namespace LangSwitch
 
         public void Exit(object sender, EventArgs e)
         {
-            if (retryTimer != null) {
-                retryTimer.Stop();
-                retryTimer.Dispose();
-                retryTimer = null;
-            }
-            if (_hookID != IntPtr.Zero)
-            {
-                UnhookWindowsHookEx(_hookID);
-                _hookID = IntPtr.Zero;
-            }
             UnregisterHotKey(hkWindow.Handle, hotkeyId);
             trayIcon.Visible = false;
             Application.Exit();
@@ -465,11 +406,6 @@ namespace LangSwitch
                 if (indicatorTimer != null) indicatorTimer.Dispose();
                 if (hkWindow != null) hkWindow.Dispose();
                 if (trayIcon != null) trayIcon.Dispose();
-            }
-            if (_hookID != IntPtr.Zero)
-            {
-                UnhookWindowsHookEx(_hookID);
-                _hookID = IntPtr.Zero;
             }
             base.Dispose(disposing);
         }
