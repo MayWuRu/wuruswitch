@@ -26,14 +26,95 @@ namespace LangSwitch
         private NotifyIcon trayIcon;
         private SettingsForm settingsForm;
         
-        [DllImport("user32.dll")]
-        public static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, int vlc);
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        
+        // --- Low Level Keyboard Hook API ---
+        private const int WH_KEYBOARD_LL = 13;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_SYSKEYDOWN = 0x0104;
+
+        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+        // -----------------------------------
+        
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct INPUT
+        {
+            public uint type;
+            public InputUnion U;
+            public static int Size { get { return Marshal.SizeOf(typeof(INPUT)); } }
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        public struct InputUnion
+        {
+            [FieldOffset(0)]
+            public MOUSEINPUT mi;
+            [FieldOffset(0)]
+            public KEYBDINPUT ki;
+            [FieldOffset(0)]
+            public HARDWAREINPUT hi;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct HARDWAREINPUT
+        {
+            public uint uMsg;
+            public ushort wParamL;
+            public ushort wParamH;
+        }
+
+        private const uint INPUT_KEYBOARD = 1;
+        private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+        private const uint KEYEVENTF_KEYUP = 0x0002;
+        private const uint KEYEVENTF_SCANCODE = 0x0008;
 
         [DllImport("user32.dll")]
-        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-        
-        [DllImport("user32.dll")]
         public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
@@ -83,7 +164,11 @@ namespace LangSwitch
         [DllImport("user32.dll")]
         public static extern short GetKeyState(int nVirtKey);
 
+
+
+
         private const int VK_CAPITAL = 0x14;
+        private const int VK_NUMLOCK = 0x90;
         private const uint WM_INPUTLANGCHANGEREQUEST = 0x0050;
 
         private const int MOD_ALT = 0x0001;
@@ -124,9 +209,15 @@ namespace LangSwitch
         private IndicatorForm indicatorForm;
         private System.Windows.Forms.Timer indicatorTimer;
 
+        private LowLevelKeyboardProc _proc;
+        private IntPtr _hookID = IntPtr.Zero;
+
         public TrayContext()
         {
             AppConfig.Load();
+
+            _proc = HookCallback;
+            _hookID = SetHook(_proc);
             
             trayIcon = new NotifyIcon()
             {
@@ -153,10 +244,71 @@ namespace LangSwitch
             ApplyHotkey();
             
             trayIcon.ShowBalloonTip(3000, "WuRuSwitch", "Program is running. Right click for settings.", ToolTipIcon.Info);
+            IndicatorTimer_Tick(null, null);
+        }
+
+        private IntPtr SetHook(LowLevelKeyboardProc proc)
+        {
+            using (var curProcess = System.Diagnostics.Process.GetCurrentProcess())
+            using (var curModule = curProcess.MainModule)
+            {
+                return SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KBDLLHOOKSTRUCT
+        {
+            public int vkCode;
+            public int scanCode;
+            public int flags;
+            public int time;
+            public IntPtr dwExtraInfo;
+        }
+
+        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0)
+            {
+                KBDLLHOOKSTRUCT kbdStruct = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
+                bool isInjected = (kbdStruct.flags & 0x10) != 0;
+                
+                if (!isInjected)
+                {
+                    if (kbdStruct.vkCode == VK_CAPITAL && AppConfig.AlwaysDisableCapsLock)
+                    {
+                        return (IntPtr)1; // Block CapsLock
+                    }
+                    if (kbdStruct.vkCode == VK_NUMLOCK && AppConfig.AlwaysEnableNumLock)
+                    {
+                        return (IntPtr)1; // Block NumLock
+                    }
+                }
+            }
+            return CallNextHookEx(_hookID, nCode, wParam, lParam);
         }
 
         private void IndicatorTimer_Tick(object sender, EventArgs e)
         {
+            // Enforce Lock Keys
+            if (AppConfig.AlwaysDisableCapsLock)
+            {
+                if ((GetKeyState(VK_CAPITAL) & 0x0001) != 0)
+                {
+                    keybd_event((byte)VK_CAPITAL, 0x3A, 0, UIntPtr.Zero);
+                    keybd_event((byte)VK_CAPITAL, 0x3A, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                }
+            }
+
+            if (AppConfig.AlwaysEnableNumLock)
+            {
+                if ((GetKeyState(VK_NUMLOCK) & 0x0001) == 0)
+                {
+                    keybd_event((byte)VK_NUMLOCK, 0x45, KEYEVENTF_EXTENDEDKEY, UIntPtr.Zero);
+                    keybd_event((byte)VK_NUMLOCK, 0x45, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, UIntPtr.Zero);
+                }
+            }
+
             if (!AppConfig.ShowLangIndicator)
             {
                 if (indicatorForm.Visible) indicatorForm.Hide();
@@ -241,7 +393,7 @@ namespace LangSwitch
             }
 
             UnregisterHotKey(hkWindow.Handle, hotkeyId);
-            int modifiers = 0;
+            uint modifiers = 0;
             if (AppConfig.Alt) modifiers |= MOD_ALT;
             if (AppConfig.Ctrl) modifiers |= MOD_CONTROL;
             if (AppConfig.Shift) modifiers |= MOD_SHIFT;
@@ -253,10 +405,10 @@ namespace LangSwitch
                 vk = Keys.F6;
             }
             
-            TryRegisterHotKey(modifiers, (int)vk, 15);
+            TryRegisterHotKey(modifiers, (uint)vk, 15);
         }
 
-        private void TryRegisterHotKey(int modifiers, int vk, int attemptsLeft)
+        private void TryRegisterHotKey(uint modifiers, uint vk, int attemptsLeft)
         {
             bool success = RegisterHotKey(hkWindow.Handle, hotkeyId, modifiers, vk);
             if (!success && attemptsLeft > 0)
@@ -294,9 +446,32 @@ namespace LangSwitch
                 retryTimer.Dispose();
                 retryTimer = null;
             }
+            if (_hookID != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(_hookID);
+                _hookID = IntPtr.Zero;
+            }
             UnregisterHotKey(hkWindow.Handle, hotkeyId);
             trayIcon.Visible = false;
             Application.Exit();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (indicatorForm != null) indicatorForm.Dispose();
+                if (settingsForm != null) settingsForm.Dispose();
+                if (indicatorTimer != null) indicatorTimer.Dispose();
+                if (hkWindow != null) hkWindow.Dispose();
+                if (trayIcon != null) trayIcon.Dispose();
+            }
+            if (_hookID != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(_hookID);
+                _hookID = IntPtr.Zero;
+            }
+            base.Dispose(disposing);
         }
 
         [DllImport("user32.dll")]
@@ -597,6 +772,8 @@ namespace LangSwitch
         public static bool Startup = false;
         public static bool AutoSwitchKeyboard = false;
         public static bool ShowLangIndicator = false;
+        public static bool AlwaysDisableCapsLock = false;
+        public static bool AlwaysEnableNumLock = false;
 
         private static string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WuRuSwitch", "config.txt");
 
@@ -625,6 +802,8 @@ namespace LangSwitch
                         bool.TryParse(lines[4].Trim(), out Win);
                         if (lines.Length >= 6) bool.TryParse(lines[5].Trim(), out AutoSwitchKeyboard);
                         if (lines.Length >= 7) bool.TryParse(lines[6].Trim(), out ShowLangIndicator);
+                        if (lines.Length >= 8) bool.TryParse(lines[7].Trim(), out AlwaysDisableCapsLock);
+                        if (lines.Length >= 9) bool.TryParse(lines[8].Trim(), out AlwaysEnableNumLock);
                     }
                 }
             }
@@ -648,7 +827,7 @@ namespace LangSwitch
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath));
-                File.WriteAllLines(ConfigPath, new string[] { Key, Ctrl.ToString(), Alt.ToString(), Shift.ToString(), Win.ToString(), AutoSwitchKeyboard.ToString(), ShowLangIndicator.ToString() });
+                File.WriteAllLines(ConfigPath, new string[] { Key, Ctrl.ToString(), Alt.ToString(), Shift.ToString(), Win.ToString(), AutoSwitchKeyboard.ToString(), ShowLangIndicator.ToString(), AlwaysDisableCapsLock.ToString(), AlwaysEnableNumLock.ToString() });
             }
             catch { }
         }
@@ -658,6 +837,7 @@ namespace LangSwitch
     {
         private TrayContext context;
         private CheckBox cbCtrl, cbAlt, cbShift, cbWin, cbStartup, cbAutoSwitch, cbShowLangIndicator;
+        private CheckBox cbAlwaysDisableCapsLock, cbAlwaysEnableNumLock;
         private ComboBox comboKey;
         private Button btnSave;
 
@@ -665,7 +845,7 @@ namespace LangSwitch
         {
             context = ctx;
             this.Text = "WuRuSwitch Settings";
-            this.Size = new Size(350, 300);
+            this.Size = new Size(350, 340);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -706,7 +886,13 @@ namespace LangSwitch
             cbShowLangIndicator = new CheckBox() { Text = "Show Lang Indicator at Cursor (แสดงธงที่เคอร์เซอร์)", Location = new Point(20, 170), Width = 300 };
             this.Controls.Add(cbShowLangIndicator);
 
-            btnSave = new Button() { Text = "Apply & Hide (บันทึกและซ่อน)", Location = new Point(20, 205), Width = 280, Height = 35, BackColor = Color.LightSkyBlue };
+            cbAlwaysDisableCapsLock = new CheckBox() { Text = "Always Disable CapsLock (บังคับปิด CapsLock เสมอ)", Location = new Point(20, 195), Width = 300 };
+            this.Controls.Add(cbAlwaysDisableCapsLock);
+
+            cbAlwaysEnableNumLock = new CheckBox() { Text = "Always Enable NumLock (บังคับเปิด NumLock เสมอ)", Location = new Point(20, 220), Width = 300 };
+            this.Controls.Add(cbAlwaysEnableNumLock);
+
+            btnSave = new Button() { Text = "Apply & Hide (บันทึกและซ่อน)", Location = new Point(20, 250), Width = 280, Height = 35, BackColor = Color.LightSkyBlue };
             btnSave.Click += BtnSave_Click;
             this.Controls.Add(btnSave);
 
@@ -722,6 +908,8 @@ namespace LangSwitch
             cbStartup.Checked = AppConfig.Startup;
             cbAutoSwitch.Checked = AppConfig.AutoSwitchKeyboard;
             cbShowLangIndicator.Checked = AppConfig.ShowLangIndicator;
+            cbAlwaysDisableCapsLock.Checked = AppConfig.AlwaysDisableCapsLock;
+            cbAlwaysEnableNumLock.Checked = AppConfig.AlwaysEnableNumLock;
             
             if (comboKey.Items.Contains(AppConfig.Key))
                 comboKey.SelectedItem = AppConfig.Key;
@@ -738,6 +926,8 @@ namespace LangSwitch
             AppConfig.Startup = cbStartup.Checked;
             AppConfig.AutoSwitchKeyboard = cbAutoSwitch.Checked;
             AppConfig.ShowLangIndicator = cbShowLangIndicator.Checked;
+            AppConfig.AlwaysDisableCapsLock = cbAlwaysDisableCapsLock.Checked;
+            AppConfig.AlwaysEnableNumLock = cbAlwaysEnableNumLock.Checked;
             AppConfig.Key = comboKey.SelectedItem.ToString();
             AppConfig.Save();
             
